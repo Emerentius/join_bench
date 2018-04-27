@@ -1,0 +1,6 @@
+[package]
+name = "join_bench"
+version = "0.1.0"
+authors = ["Emerentius <emerentius@arcor.de>"]
+
+[dependencies]
