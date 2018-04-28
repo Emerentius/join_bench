@@ -2,211 +2,73 @@
 extern crate test;
 use std::ptr;
 
+#[inline(always)]
 fn join(slice: &[&str], sep: &str) -> String {
-    if slice.is_empty() {
-        return String::new();
-    }
-
-    // concat is faster
-    if sep.is_empty() {
-        return slice.concat();
-    }
-
-    // this is wrong without the guarantee that `slice` is non-empty
-    // `len` calculation may overflow but push_str but will check boundaries
-    let len = sep.len() * (slice.len() - 1) +
-                slice.iter().map(|s| s.len()).sum::<usize>();
-    let mut result = String::with_capacity(len);
-    let mut first = true;
-
-    for s in slice {
-        if first {
-            first = false;
-        } else {
-            result.push_str(sep);
-        }
-        result.push_str(s);
-    }
-    result
+    slice.join(sep)
 }
-/*
-fn join2_<S: std::borrow::Borrow<str>>(slice: &[S], sep: &str) -> String {
+
+static SEP: &str = "aaaa";
+fn join_new<S: std::borrow::Borrow<str>>(slice: &[S], sep: &str) -> String {
     // concat is faster
     if sep.is_empty() {
         return slice.concat();
     }
-
+    let sep_len = sep.len();
     let mut iter = slice.iter();
     if let Some(first) = iter.next() {
         // this is wrong without the guarantee that `slice` is non-empty
-        // `len` calculation may overflow but push_str but will check boundaries
-        let len = sep.len() * (slice.len() - 1) +
-                    slice.iter().map(|s| s.borrow().len()).sum::<usize>();
-        let mut result = String::with_capacity(len);
-
-        result.push_str(first.borrow());
-
-        for s in iter {
-            result.push_str(sep);
-            result.push_str(s.borrow());
-        }
-        result
-    } else {
-        String::new()
-    }
-}
-*/
-
-#[allow(unused)]
-fn join_into_vec<T, S>(slice: &[S], sep: &[T]) -> Vec<T>
-where
-    T: Clone,
-    S: std::borrow::Borrow<[T]>,
-    //B: std::convert::AsRef<[T]> + ?Sized,
-
-{
-    /* FIXME
-    // concat is faster
-    if sep.is_empty() {
-        return slice.concat();
-    }
-    */
-
-    let mut iter = slice.iter();
-    if let Some(first) = iter.next() {
-        // this is wrong without the guarantee that `slice` is non-empty
-        // `len` calculation may overflow.
-        // catch `len` overflows and panic directly. The rest of this function relies
-        // on having reserved no less than the necessary memory
-        // the safe alternative would panic anyway by running out of memory
-        let len =  sep.len().checked_mul(slice.len() - 1).and_then(|n| {
-            let mut sum = n;
-            for l in slice.iter().map(|s| s.borrow().len()) {
-                sum = sum.checked_add(l)?;
-            }
-            Some(sum)
-        }).expect("attempt to join into collection with len > usize::MAX");
-
-        let mut result = Vec::with_capacity(len);
-        result.extend_from_slice(first.borrow());
-
-        unsafe {
-            {
-                let pos = result.len();
-                let mut slice = result.get_unchecked_mut(pos..len);
-                //let mut pos = result.len();
-
-                for s in iter {
-                    /*
-                    result.get_unchecked_mut(pos..pos+sep.len()).copy_from_slice(sep.as_bytes());
-                    result.get_unchecked_mut(pos+sep.len()..pos+sep.len()+s.borrow().len()).copy_from_slice(s.borrow().as_bytes());
-                    pos += sep.len() + s.borrow().len();
-                    //result.push_str(s.borrow());
-                    */
-
-                    /*
-                    let new_pos = pos + sep.len() + s.borrow().len();
-                    let slice = result.get_unchecked_mut(pos..new_pos);
-                    let (sep_slice, str_slice) = slice.split_at_mut(sep.len());
-                    sep_slice.clone_from_slice(sep);
-                    str_slice.clone_from_slice(s.borrow());
-                    pos += sep.len() + s.borrow().len();
-                    */
-                    let s_bytes = s.borrow();
-                    slice.get_unchecked_mut(0..sep.len())
-                        .clone_from_slice(sep);
-
-                    slice = {slice}.get_unchecked_mut(sep.len()..);
-                    slice.get_unchecked_mut(..s_bytes.len())
-                        .clone_from_slice(s_bytes);
-                    slice = {slice}.get_unchecked_mut(s_bytes.len()..);
-                }
-            }
-            result.set_len(len);
-        }
-        result
-    } else {
-        vec![]
-    }
-}
-
-fn join2<S: std::borrow::Borrow<str>>(slice: &[S], sep: &str) -> String {
-    // concat is faster
-    if sep.is_empty() {
-        return slice.concat();
-    }
-
-    let mut iter = slice.iter();
-    if let Some(first) = iter.next() {
-        // this is wrong without the guarantee that `slice` is non-empty
-        // `len` calculation may overflow.
-        // catch `len` overflows and panic directly. The rest of this function relies
-        // on having reserved no less than the necessary memory
-        // the safe alternative would panic anyway by running out of memory
-        let len =  sep.len().checked_mul(slice.len() - 1).and_then(|n| {
-            let mut sum = n;
-            for l in slice.iter().map(|s| s.borrow().len()) {
-                sum = sum.checked_add(l)?;
-            }
-            Some(sum)
+        // if the `len` calculation overflows, we'll panic
+        // we would have run out of memory anyway and the rest of the function requires
+        // the entire String pre-allocated for safety
+        //
+        // this is the exact len of the resulting String
+        let len =  sep_len.checked_mul(slice.len() - 1).and_then(|n| {
+            slice.iter().map(|s| s.borrow().len()).try_fold(n, usize::checked_add)
         }).expect("attempt to join into String with len > usize::MAX");
 
+        // crucial for safety
         let mut result = String::with_capacity(len);
 
         unsafe {
             let mut result = result.as_mut_vec();
             result.extend_from_slice(first.borrow().as_bytes());
-            let mut pos = result.len();
 
             {
-                let mut slice = result.get_unchecked_mut(pos..len);
-                //let mut ptr: *mut u8 = &mut result[pos];
+                let pos = result.len();
+                let mut target = result.get_unchecked_mut(pos..len);
 
-                for s in iter {
-                    /*
-                    result.get_unchecked_mut(pos..pos+sep.len()).copy_from_slice(sep.as_bytes());
-                    result.get_unchecked_mut(pos+sep.len()..pos+sep.len()+s.borrow().len()).copy_from_slice(s.borrow().as_bytes());
-                    pos += sep.len() + s.borrow().len();
-                    //result.push_str(s.borrow());
-                    */
+                // short separators
+                //if let &[byte] = sep.as_bytes() {
+                //if true {
+                let sep_bytes = sep.as_bytes();
+                if sep.len() == 4 {
+                    for s in iter {
+                        target.get_unchecked_mut(..4)
+                            .copy_from_slice(sep_bytes);
 
-                    /*
-                    let new_pos = pos + sep.len() + s.borrow().len();
-                    let slice = result.get_unchecked_mut(pos..new_pos);
-                    let (sep_slice, str_slice) = slice.split_at_mut(sep.len());
-                    sep_slice.copy_from_slice(sep.as_bytes());
-                    str_slice.copy_from_slice(s.borrow().as_bytes());
-                    pos += sep.len() + s.borrow().len();
-                    */
+                        let s_bytes = s.borrow().as_bytes();
+                        let offset = s_bytes.len();
+                        target = {target}.get_unchecked_mut(4..);
+                        target.get_unchecked_mut(..offset)
+                            .copy_from_slice(s_bytes);
+                        target = {target}.get_unchecked_mut(offset..);
+                    }
+                } else {
+                    // fill the String with the slice of &str's
+                    // without bounds checks or len adjustments
+                    for s in iter {
+                        target.get_unchecked_mut(..sep_len) // one more mov
+                            .copy_from_slice(sep_bytes);
 
-                    // BEST
-                    let s_bytes = s.borrow().as_bytes();
-                    slice.get_unchecked_mut(..sep.len())
-                        .copy_from_slice(sep.as_bytes());
-
-                    slice = {slice}.get_unchecked_mut(sep.len()..);
-                    slice.get_unchecked_mut(..s_bytes.len())
-                        .copy_from_slice(s_bytes);
-                    slice = {slice}.get_unchecked_mut(s_bytes.len()..);
-
-                    /*
-                    let (sep_slice, tail) = {slice}.split_at_mut(sep_len);
-                    let (s_slice, tail) = tail.split_at_mut(s.borrow().as_bytes().len());
-                    let s_bytes = s.borrow().as_bytes();
-                    sep_slice.copy_from_slice(sep.as_bytes());
-                    //slice = {slice}.get_unchecked_mut(sep_len..);
-                    s_slice.copy_from_slice(s_bytes);
-                    slice = tail;
-                    */
-
-                    /*
-                    ptr::copy_nonoverlapping(sep.as_bytes() as *const [u8] as *const u8, ptr, sep.len());
-                    //ptr = ptr.add(sep.len());
-                    let s_bytes = s.borrow().as_bytes();
-                    ptr::copy_nonoverlapping(s_bytes as *const [u8] as *const u8, ptr.add(sep.len()), s_bytes.len());
-                    ptr = ptr.add(sep.len() + s_bytes.len());
-                    */
+                        let s_bytes = s.borrow().as_bytes(); // identical
+                        let offset = s_bytes.len();
+                        target = {target}.get_unchecked_mut(sep_len..); // one more mov
+                        target.get_unchecked_mut(..offset)
+                            .copy_from_slice(s_bytes);
+                        target = {target}.get_unchecked_mut(offset..);
+                    }
                 }
+
             }
             result.set_len(len);
         }
@@ -216,24 +78,11 @@ fn join2<S: std::borrow::Borrow<str>>(slice: &[S], sep: &str) -> String {
     }
 }
 
-fn join_vec_other<T: Clone, V: std::borrow::Borrow<[T]>>(slice: &[V], sep: &T) -> Vec<T> {
-    //return join_into_vec(slice, &[sep.clone()]);
-
-    //let size = slice.iter().fold(0, |acc, v| acc + v.borrow().len());
-    //let mut result = Vec::with_capacity(size + slice.len());
-    /*
-    let mut first = true;
-    for v in slice {
-        if first {
-            first = false
-        } else {
-            result.push(sep.clone())
-        }
-        result.extend_from_slice(v.borrow())
-    }
-    result
-    */
-
+// not quite a replacement for the std lib
+// that one works with T: Clone
+// but slice.clone_from_slice() would drop uninitialized memory
+// need to use ptr::write;
+fn join_vec_new<T: Copy, V: std::borrow::Borrow<[T]>>(slice: &[V], sep: &T) -> Vec<T> {
     let mut iter = slice.iter();
     if let Some(first) = iter.next() {
         // this is wrong without the guarantee that `slice` is non-empty
@@ -241,63 +90,35 @@ fn join_vec_other<T: Clone, V: std::borrow::Borrow<[T]>>(slice: &[V], sep: &T) -
         // catch `len` overflows and panic directly. The rest of this function relies
         // on having reserved no less than the necessary memory
         // the safe alternative would panic anyway by running out of memory
-        let len =  (|| {
-            let mut sum = slice.len() - 1;
-            for l in slice.iter().map(|s| s.borrow().len()) {
-                sum = sum.checked_add(l)?;
-            }
-            Some(sum)
-        })().unwrap();
+        let len = slice.iter()
+            .map(|s| s.borrow().len())
+            .try_fold(slice.len() - 1, usize::checked_add)
+            .expect("attempt to join into collection with len > usize::MAX");
 
         let mut result = Vec::with_capacity(len);
         result.extend_from_slice(first.borrow());
 
         unsafe {
-            let mut pos = result.len();
-            result.set_len(len); // FIXME after loop
+            let pos = result.len();
             let mut slice = result.get_unchecked_mut(pos..len);
 
             for s in iter {
-                /*
-                result.get_unchecked_mut(pos..pos+sep.len()).copy_from_slice(sep.as_bytes());
-                result.get_unchecked_mut(pos+sep.len()..pos+sep.len()+s.borrow().len()).copy_from_slice(s.borrow().as_bytes());
-                pos += sep.len() + s.borrow().len();
-                //result.push_str(s.borrow());
-                */
-
-                /*
-                let new_pos = pos + 1 + s.borrow().len();
-                *result.get_unchecked_mut(pos) = sep.clone();
-                result.get_unchecked_mut(pos+1..new_pos).clone_from_slice(s.borrow());
-                pos += 1 + s.borrow().len();
-                */
-
                 slice[0] = sep.clone();
                 let offset = s.borrow().len();
-                slice.get_unchecked_mut(1..1+offset).clone_from_slice(s.borrow());
+                slice.get_unchecked_mut(1..1+offset).copy_from_slice(s.borrow());
                 slice = &mut {slice}[1+offset..];
-
             }
         }
+        unsafe { result.set_len(len); }
         result
     } else {
         vec![]
     }
 }
 
+#[inline(always)]
 fn join_vec<T: Clone, V: std::borrow::Borrow<[T]>>(slice: &[V], sep: &T) -> Vec<T> {
-    let size = slice.iter().fold(0, |acc, v| acc + v.borrow().len());
-    let mut result = Vec::with_capacity(size + slice.len());
-    let mut first = true;
-    for v in slice {
-        if first {
-            first = false
-        } else {
-            result.push(sep.clone())
-        }
-        result.extend_from_slice(v.borrow())
-    }
-    result
+    slice.join(sep)
 }
 
 fn main() {
@@ -311,7 +132,6 @@ static SMALL: [&str; 10] = [
     "abcbevfglneul",];
 static LONG: [&str; 1000] = ["8862205", "862120", "5267058", "1881263", "6802209", "2377309", "6884761", "2480056", "7448557", "4530034", "8394917", "6279235", "7807357", "8561563", "3230827", "3243825", "3503432", "6221971", "8837572", "2311554", "9905037", "548618", "3264032", "4867109", "9466642", "1993062", "104115", "9949047", "1185370", "5536112", "6736413", "1010186", "949542", "4359599", "1284449", "5958787", "699171", "7427528", "629918", "4299968", "6465455", "2820155", "531710", "4226993", "8133681", "9868299", "9266164", "3236046", "9846556", "6691221", "2270922", "2086406", "7011418", "2571711", "4579466", "6577118", "962157", "3610734", "2073021", "6241537", "8809063", "7311514", "354638", "6799626", "2945041", "4979656", "3211964", "4055489", "2016408", "6699256", "440984", "9179817", "9949411", "27934", "8183059", "6480472", "8427035", "810375", "2957997", "4660807", "5162557", "3460974", "4978530", "918794", "5710794", "4759702", "8124606", "2140004", "2447421", "2980946", "8632188", "1085717", "8935119", "746713", "5688085", "9881173", "9798945", "1015157", "8304124", "7651081", "2279712", "4343984", "4691565", "2625431", "8538201", "9879916", "7512520", "9269701", "1573798", "1059524", "6166511", "6599819", "4605174", "3739368", "6883907", "2487841", "5758440", "6430236", "4968365", "3258090", "3258501", "6290921", "5673243", "391766", "1647262", "2004786", "8444062", "6865419", "5257600", "6680734", "6709173", "4552769", "6433386", "8041009", "9485613", "3328789", "5095055", "2169779", "2200393", "8184165", "5206369", "1438971", "7905985", "8946637", "1161490", "8626713", "5042699", "6349632", "7407561", "9944275", "9161044", "8618157", "9763122", "9807168", "7929929", "3232629", "6137841", "2015488", "1250947", "7901140", "7504300", "2433424", "6242616", "9655203", "6806094", "7261116", "4979408", "3317942", "5723342", "8875589", "4385142", "6167248", "7800455", "2317044", "7464773", "6047424", "878087", "7232826", "2081524", "1477339", "7007211", "3825468", "2142982", "1326772", "9281289", "2630029", "3777360", "9229331", "6658828", "8053114", "7390665", "1548797", "8312264", "6299119", "4816281", "4054084", "4120733", "8911288", "8131907", "7107213", "2932731", "1164102", "2697709", "6469272", "9428136", "8701925", "7954003", "2731320", "1281541", "8766980", "2876113", "7888928", "9871158", "8240142", "2728383", "3966251", "4161830", "7706384", "6831404", "8859003", "5394162", "7825737", "7010615", "9937939", "6821499", "8080401", "1695193", "5125934", "4110032", "3207589", "484432", "306324", "4994097", "3534513", "1798173", "8869528", "4207978", "5258674", "5874112", "9646793", "9815226", "8692398", "4329388", "2977456", "2160720", "1676279", "7776238", "7690177", "4718795", "4917182", "4942042", "3606775", "5299805", "2786156", "2739952", "8267625", "4321351", "1445821", "6101909", "8516388", "7451793", "7443834", "442374", "1708424", "9893535", "6037048", "4260320", "9642493", "9344822", "3580965", "8287707", "5925263", "1988103", "716623", "6041406", "5302070", "2249202", "2087690", "2294318", "6978820", "4386461", "5977475", "8056874", "8056926", "8308475", "1891024", "7861805", "6905708", "562513", "4244719", "3354013", "1511024", "7111951", "3292557", "9066237", "9922263", "2101492", "8396315", "9323562", "6112412", "5747510", "2108764", "9394532", "2563516", "7784586", "2441022", "2409451", "4792575", "7471602", "7335796", "3610067", "6665680", "1685226", "2419055", "4355929", "3979615", "6297414", "5160589", "7514404", "9445901", "1140227", "5001699", "8544775", "8154725", "1868637", "7118861", "6132190", "694320", "5953590", "8454956", "5206953", "1966645", "6816221", "7922888", "7289293", "4119413", "2142166", "8537267", "6447599", "7551273", "851658", "5361293", "3467070", "8043577", "7550034", "9462070", "4236751", "8355947", "2646816", "7754016", "9632129", "7251705", "9847887", "1359680", "6305922", "1254448", "4704185", "2922435", "7332015", "4961257", "9356026", "9099224", "9092987", "8788673", "2488350", "614477", "8140321", "8818318", "170169", "2837885", "5708613", "6791153", "3426021", "1672411", "8262470", "1726842", "704466", "8358349", "2733483", "6001121", "9603015", "4592763", "8557819", "5984300", "5944994", "2877873", "1622971", "8377884", "3092416", "8298891", "8073066", "9855881", "827857", "1324354", "1040349", "4447343", "386346", "5403378", "7175322", "1417021", "6147993", "6048543", "5135934", "4181102", "3922214", "9882588", "8078398", "4846164", "9875799", "7887010", "7931029", "5756563", "5236540", "2016236", "4436239", "1264269", "4538710", "4732044", "3526597", "4371229", "8978682", "5029149", "1824814", "3184125", "8682371", "2678202", "8437724", "6278622", "4033614", "7788250", "8042754", "1856726", "2627422", "3396422", "2878318", "3689371", "5669451", "5378129", "2061001", "3538230", "7689705", "6317441", "1279197", "8069102", "1152751", "1043278", "110242", "1498713", "1919005", "6473844", "7326395", "7123761", "5056202", "2588724", "2216167", "9801701", "4778239", "5920542", "7883351", "8718619", "520354", "5935299", "7211846", "416419", "7012152", "7221830", "7046307", "9142361", "3991589", "9380227", "647860", "5680267", "1528981", "3507729", "9057707", "3185335", "1813286", "3479523", "108528", "1334504", "7172150", "6925561", "9014113", "4341378", "341964", "3793745", "773498", "747344", "7323046", "7384275", "6555756", "1970109", "9308963", "8162762", "9187904", "9355400", "2961663", "5939280", "5828749", "4491159", "5776307", "2735417", "5523039", "6110697", "3248730", "4584374", "2135517", "7294523", "9146349", "4941304", "6553650", "4150086", "8728817", "7318675", "7397393", "2124452", "5982344", "2991054", "8963139", "5175572", "4331992", "4389313", "3534975", "5357", "5782000", "7989744", "2213774", "6304935", "8761366", "6693241", "9019938", "2944686", "5017274", "4177415", "7816342", "9880424", "1795340", "1828137", "8450767", "1109055", "9726847", "2633162", "1484762", "5294617", "6248503", "7035530", "2156147", "1243350", "6824695", "7816832", "9340669", "7026208", "5585434", "5548246", "9600887", "9032417", "1017734", "7614354", "5581587", "5322705", "1160153", "6270616", "3074782", "5749206", "2358076", "4340359", "7157165", "4970992", "6331317", "421871", "4924391", "8732904", "369672", "9907049", "7118766", "3440143", "8776413", "3018218", "2522002", "7714232", "7766107", "28936", "5905759", "6232599", "1596305", "6489205", "4927712", "2160698", "7084994", "1811970", "3708884", "3201484", "3695741", "7288946", "8148524", "6384284", "5347964", "2527639", "5081256", "1588924", "7728811", "8276719", "3913818", "9107308", "2068048", "7155280", "1415462", "1268921", "3445991", "4502912", "3724189", "1191359", "6550650", "817203", "8721745", "4599195", "8958997", "4672128", "2680795", "1804651", "195373", "9907793", "8610558", "3846873", "9435856", "9168112", "4319966", "257673", "9619767", "6910621", "172746", "9826399", "6926920", "9124057", "779591", "1854611", "7583103", "6021870", "5382473", "6252334", "516970", "8946928", "6711466", "5035594", "8113724", "2208483", "1365711", "2224709", "9520238", "8378101", "7694653", "7470587", "3163023", "3792831", "1375427", "2209753", "4847596", "6824083", "9754703", "5230450", "1131134", "8974367", "5091440", "4053393", "9879296", "3180725", "267761", "1424167", "901557", "6815575", "582084", "3919750", "168844", "2696480", "4317074", "800152", "3813840", "2691114", "2006980", "1328487", "278094", "2209640", "619252", "2257420", "9028516", "4052793", "9066383", "7615877", "3416164", "6749836", "118767", "5027013", "2662734", "501031", "6080608", "1314732", "4198576", "1784538", "599555", "8510063", "1582167", "6530219", "6841475", "9774992", "5540204", "4539109", "4532207", "4015182", "6418191", "4703633", "2621541", "1979356", "5451651", "4719208", "307960", "9148793", "8475088", "8446734", "3679720", "4316998", "6308155", "1071544", "8234878", "4314969", "1343779", "1306366", "4059640", "140556", "7423334", "2225181", "2212450", "3914580", "6047916", "1580035", "7150145", "7931190", "7969812", "254902", "3269468", "90917", "2941225", "3169566", "7729994", "8035375", "2278847", "1077577", "6400077", "7086614", "3024656", "2971391", "7185682", "9242446", "7897004", "3245650", "1340915", "4181094", "3611275", "5853345", "5997405", "4680421", "2171987", "3916732", "6237060", "6978169", "6821906", "292941", "6316418", "7846461", "3190732", "4005631", "6637718", "9259356", "5764459", "1124512", "2881577", "6852264", "5895695", "9463703", "9764854", "4039748", "5612728", "513297", "269714", "3009920", "9305560", "4275422", "2705841", "6368778", "5422580", "8167115", "6538254", "3946895", "2864816", "3111998", "8779425", "1609767", "6945667", "1183823", "8063788", "4264956", "2368590", "5917631", "6342408", "7571586", "7113991", "5054856", "9272804", "9692840", "5066923", "313198", "845902", "8808657", "8252590", "7139306", "1513209", "1475734", "3966408", "9025658", "2949195", "5531136", "7149638", "5603315", "3598679", "8021839", "5269000", "2589839", "5651706", "9114295", "1076942", "8141340", "7070365", "8557633", "5425619", "2950279", "8635949", "3754194", "3533519", "6015770", "1998361", "6589536", "5539199", "2619459", "283119", "1642533", "3474452", "2961722", "6145255", "7406428", "4217657", "3742821", "3850050", "141887", "6204547", "6647567", "4056260", "4154733", "5202352", "3578173", "599857", "2326417", "2246526", "4342751", "2498464", "6261010", "5294497", "2589228", "5391051", "8062452", "3168311", "2281271", "9034403", "5545117", "6665996", "779150", "9088619", "1365480", "2937351", "9079173", "8838309", "2623267", "3390741", "6050307", "1982058", "931510", "3550799", "3883085", "9050797", "77968", "8244793", "2094284", "1179797", "1173578", "59688", "8397663", "4746486", "5437826", "668511", "789988", "2503822", "5537406", "6961042", "2558100", "9528746", "9993354", "657257", "506333", "1073407", "5148716", "4759533", "9279169", "3443461", "7159174", "1402087", "8814519", "1803940", "6372191", "8781393", "8761859", "1134788", "5554528", "2625299", "3011329", "9934428", "2180468", "8864167", "1678443", "3080642", "8482959", "5675153", "5975469", "9653913", "2160841", "353727", "6984410", "7907512", "4623063", "2103795", "8208667", "5136753", "4857472", "168651", "8410028", "7174864", "8617723", "7522879", "2634546", "2718464", "4369129", "2335343", "3388624", "6564304", "6368332", "259143", "1571467", "6813990", "7058153", "9355411", "461692", "3675085", "729218", "3613865", "6649464", "1824530", "6591133", "9649058", "893950", "7822982", "5009754", "3046722", "6815105", "4706164", "6955576", "3612624", "3553115", "7634657", "3265503", "1630296", "2552103", "8045284", "7269773", "1721730", "2992316", "9069794", "3403331", "8059871", "9288426", "8783297", "870369", "5485740", "7491296", "9188713", "1580925", "4698346", "8513200", "5544671", "1270588", "9974096", "9849024", "2066025", "6045192"];
 
-static SEP: &str = "ababababababguflnefvunle";
 
 #[bench]
 fn string_small_regular(b: &mut test::Bencher) {
@@ -321,9 +141,9 @@ fn string_small_regular(b: &mut test::Bencher) {
 }
 
 #[bench]
-fn string_small_other(b: &mut test::Bencher) {
+fn string_small_new(b: &mut test::Bencher) {
     b.iter(||
-        for _ in 0..REPETITIONS { join2(&SMALL, SEP); }
+        for _ in 0..REPETITIONS { join_new(&SMALL, SEP); }
     )
 }
 
@@ -335,16 +155,30 @@ fn string_large_regular(b: &mut test::Bencher) {
 }
 
 #[bench]
-fn string_large_other(b: &mut test::Bencher) {
+fn string_large_new(b: &mut test::Bencher) {
     b.iter(||
-       for _ in 0..REPETITIONS { join2(&LONG, SEP); }
+       for _ in 0..REPETITIONS { join_new(&LONG, SEP); }
     )
 }
 
+#[bench]
+fn string_empty_sep(b: &mut test::Bencher) {
+    b.iter(|| {
+       for _ in 0..REPETITIONS { join_new(&LONG, ""); }
+    })
+}
+
+#[bench]
+fn string_concat(b: &mut test::Bencher) {
+    b.iter(|| {
+       for _ in 0..REPETITIONS { LONG.concat(); }
+    })
+}
+
 #[test]
-fn string_other_regular() {
-    assert_eq!(join(&SMALL, "_"), join2(&SMALL, "_"));
-    assert_eq!(join(&LONG, "_"), join2(&LONG, "_"));
+fn string_new_regular() {
+    assert_eq!(join(&SMALL, "_"), join_new(&SMALL, "_"));
+    assert_eq!(join(&LONG, "_"), join_new(&LONG, "_"));
 }
 
 static SMALL_VEC: [&[u8]; 10] = [
@@ -368,10 +202,10 @@ fn vec_small_regular(b: &mut test::Bencher) {
 }
 
 #[bench]
-fn vec_small_other(b: &mut test::Bencher) {
+fn vec_small_new(b: &mut test::Bencher) {
     b.iter(||
         for _ in 0..REPETITIONS {
-            join_vec_other(&SMALL_VEC, SEP_VEC);
+            join_vec_new(&SMALL_VEC, SEP_VEC);
         }
     )
 }
@@ -386,20 +220,20 @@ fn vec_large_regular(b: &mut test::Bencher) {
 }
 
 #[bench]
-fn vec_large_other(b: &mut test::Bencher) {
+fn vec_large_new(b: &mut test::Bencher) {
     b.iter(||
         for _ in 0..REPETITIONS {
-           join_vec_other(&LONG_VEC, SEP_VEC);
+           join_vec_new(&LONG_VEC, SEP_VEC);
         }
     )
 }
 
 #[test]
-fn vec_other_regular() {
-    assert_eq!(join_vec(&SMALL_VEC, SEP_VEC), join_vec_other(&SMALL_VEC, SEP_VEC));
-    assert_eq!(join_vec(&LONG_VEC, SEP_VEC), join_vec_other(&LONG_VEC, SEP_VEC));
+fn vec_new_regular() {
+    assert_eq!(join_vec(&SMALL_VEC, SEP_VEC), join_vec_new(&SMALL_VEC, SEP_VEC));
+    assert_eq!(join_vec(&LONG_VEC, SEP_VEC), join_vec_new(&LONG_VEC, SEP_VEC));
 }
-
+/*
 #[bench]
 fn sanity_vec(b: &mut test::Bencher) {
     b.iter(|| {
@@ -475,7 +309,7 @@ fn sanity_join_string(b: &mut test::Bencher) {
         LONG.join("A");
     })
 }
-
+*/
 #[test]
 fn byte_equality() {
     for (s, &b) in SMALL.iter().zip(SMALL_VEC.iter()) {
