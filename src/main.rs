@@ -7,7 +7,47 @@ fn join(slice: &[&str], sep: &str) -> String {
     slice.join(sep)
 }
 
-static SEP: &str = "aaaa";
+macro_rules! spezialize_for_lengths {
+    ($separator:expr, $target:expr, $iter:expr; $($num:expr),*) => {
+        let mut target = $target;
+        let iter = $iter;
+        let sep_len = $separator.len();
+        let sep_bytes = $separator.as_bytes();
+        match $separator.len() {
+            $(
+                $num => {
+                    for s in iter {
+                        target.get_unchecked_mut(..$num)
+                            .copy_from_slice(sep_bytes);
+
+                        let s_bytes = s.borrow().as_bytes();
+                        let offset = s_bytes.len();
+                        target = {target}.get_unchecked_mut($num..);
+                        target.get_unchecked_mut(..offset)
+                            .copy_from_slice(s_bytes);
+                        target = {target}.get_unchecked_mut(offset..);
+                    }
+                },
+            )*
+            _ => {
+                // fallback
+                for s in iter {
+                    target.get_unchecked_mut(..sep_len)
+                        .copy_from_slice(sep_bytes);
+
+                    let s_bytes = s.borrow().as_bytes();
+                    let offset = s_bytes.len();
+                    target = {target}.get_unchecked_mut(sep_len..);
+                    target.get_unchecked_mut(..offset)
+                        .copy_from_slice(s_bytes);
+                    target = {target}.get_unchecked_mut(offset..);
+                }
+            }
+        }
+    };
+}
+
+static SEP: &str = "aaaaa";
 fn join_new<S: std::borrow::Borrow<str>>(slice: &[S], sep: &str) -> String {
     // concat is faster
     if sep.is_empty() {
@@ -40,34 +80,8 @@ fn join_new<S: std::borrow::Borrow<str>>(slice: &[S], sep: &str) -> String {
                 // short separators
                 //if let &[byte] = sep.as_bytes() {
                 //if true {
-                let sep_bytes = sep.as_bytes();
-                if sep.len() == 4 {
-                    for s in iter {
-                        target.get_unchecked_mut(..4)
-                            .copy_from_slice(sep_bytes);
 
-                        let s_bytes = s.borrow().as_bytes();
-                        let offset = s_bytes.len();
-                        target = {target}.get_unchecked_mut(4..);
-                        target.get_unchecked_mut(..offset)
-                            .copy_from_slice(s_bytes);
-                        target = {target}.get_unchecked_mut(offset..);
-                    }
-                } else {
-                    // fill the String with the slice of &str's
-                    // without bounds checks or len adjustments
-                    for s in iter {
-                        target.get_unchecked_mut(..sep_len) // one more mov
-                            .copy_from_slice(sep_bytes);
-
-                        let s_bytes = s.borrow().as_bytes(); // identical
-                        let offset = s_bytes.len();
-                        target = {target}.get_unchecked_mut(sep_len..); // one more mov
-                        target.get_unchecked_mut(..offset)
-                            .copy_from_slice(s_bytes);
-                        target = {target}.get_unchecked_mut(offset..);
-                    }
-                }
+                spezialize_for_lengths!(sep, target, iter; 1, 2, 3, 4, 5);
 
             }
             result.set_len(len);
