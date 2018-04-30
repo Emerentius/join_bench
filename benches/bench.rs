@@ -71,6 +71,13 @@ fn bench_join(c: &mut Criterion) {
     }
 }
 
+fn concat_std(c: &mut Criterion) {
+    c.bench_function("concat_std", |b| b.iter(|| SLICE[0..1000].concat()));
+}
 
-criterion_group!(benches, bench_join);
+fn concat(c: &mut Criterion) {
+    c.bench_function("concat", |b| b.iter(|| join_new(&SLICE[0..1000], "")));
+}
+
+criterion_group!(benches, bench_join, concat, concat_std);
 criterion_main!(benches);

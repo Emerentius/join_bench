@@ -6,6 +6,8 @@ macro_rules! spezialize_for_lengths {
         let sep_bytes = $separator.as_bytes();
         match $separator.len() {
             $(
+                // loops with hardcoded sizes run much faster
+                // specialize the cases with small separator lengths
                 $num => {
                     for s in iter {
                         target.get_unchecked_mut(..$num)
@@ -21,6 +23,7 @@ macro_rules! spezialize_for_lengths {
                 },
             )*
             0 => {
+                // concat, same principle without the separator
                 for s in iter {
                     let s_bytes = s.borrow().as_bytes();
                     let offset = s_bytes.len();
@@ -30,7 +33,7 @@ macro_rules! spezialize_for_lengths {
                 }
             },
             _ => {
-                // fallback
+                // arbitrary non-zero size fallback
                 for s in iter {
                     target.get_unchecked_mut(..sep_len)
                         .copy_from_slice(sep_bytes);
@@ -72,8 +75,9 @@ pub fn join_new<S: std::borrow::Borrow<str>>(slice: &[S], sep: &str) -> String {
                 let pos = result.len();
                 let mut target = result.get_unchecked_mut(pos..len);
 
+                // copy separator and strs over without bounds checks
                 // generate loops with hardcoded offsets for small separators
-                // massive improvements possible
+                // massive improvements possible (~ x2)
                 spezialize_for_lengths!(sep, target, iter; 1, 2, 3, 4);
             }
             result.set_len(len);
