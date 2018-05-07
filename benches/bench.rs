@@ -8,6 +8,8 @@ extern crate rand;
 
 use rand::Rng;
 use join_bench::join_new;
+use join_bench::join_new_vec;
+use join_bench::concat_new_vec;
 use criterion::Criterion;
 
 const N: usize = 10_000;
@@ -24,13 +26,12 @@ lazy_static! {
         }
         strings
     };
-    /*
+
     static ref BYTE_SLICE: Vec<&'static [u8]> = {
         SLICE.iter()
             .map(|s| s.as_bytes())
             .collect()
     };
-    */
 }
 
 fn bench_join(c: &mut Criterion) {
@@ -71,6 +72,43 @@ fn bench_join(c: &mut Criterion) {
     }
 }
 
+fn vec_bench_join(c: &mut Criterion) {
+
+    let separator = 0;
+
+    let mut inputs = vec![];
+    for offset in (0..3).map(|n| n * N) {
+        for &slice_len in [
+            10,
+            100,
+            1000,
+            10_000
+        ].iter() {
+            inputs.push((&BYTE_SLICE[offset..offset+slice_len], separator));
+        }
+    }
+
+    // initialize static
+    BYTE_SLICE.len();
+
+    for input in inputs {
+        let slice = input.0;
+        let sep = input.1;
+        let string_len = slice[0].len();
+        let slice_len = slice.len();
+        let sep_len = 1;
+
+        let sep_ = sep.clone();
+        let slice_ = slice.clone();
+        let bench = criterion::Benchmark::new(
+                "vec_old_join",
+                move |b| b.iter(|| slice_.join(&sep_)),
+            )
+            .with_function("vec_new_join", move |b| b.iter(|| join_new_vec(slice, &sep),));
+        c.bench(&format!("len:{}_n:{}_sep_len:{}", string_len, slice_len, sep_len),  bench);
+    }
+}
+
 fn concat_std(c: &mut Criterion) {
     c.bench_function("concat_std", |b| b.iter(|| SLICE[0..1000].concat()));
 }
@@ -79,5 +117,13 @@ fn concat(c: &mut Criterion) {
     c.bench_function("concat", |b| b.iter(|| join_new(&SLICE[0..1000], "")));
 }
 
-criterion_group!(benches, bench_join, concat, concat_std);
+fn vec_concat_std(c: &mut Criterion) {
+    c.bench_function("vec_concat_std", |b| b.iter(|| BYTE_SLICE[0..1000].concat()));
+}
+
+fn vec_concat(c: &mut Criterion) {
+    c.bench_function("vec_concat", |b| b.iter(|| concat_new_vec(&BYTE_SLICE[0..1000])));
+}
+
+criterion_group!(benches, bench_join, concat, concat_std, vec_bench_join, vec_concat_std, vec_concat);
 criterion_main!(benches);
