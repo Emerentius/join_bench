@@ -125,5 +125,11 @@ fn vec_concat(c: &mut Criterion) {
     c.bench_function("vec_concat", |b| b.iter(|| concat_new_vec(&BYTE_SLICE[0..1000])));
 }
 
-criterion_group!(benches, bench_join, concat, concat_std, vec_bench_join, vec_concat_std, vec_concat);
+criterion_group!(
+    name = benches;
+    config = Criterion::default()
+        .warm_up_time(std::time::Duration::from_millis(1000))
+        .measurement_time(std::time::Duration::from_millis(3000));
+    targets = bench_join, concat, concat_std, vec_bench_join, vec_concat_std, vec_concat
+);
 criterion_main!(benches);

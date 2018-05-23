@@ -4,11 +4,10 @@ pub fn join_new<S: std::borrow::Borrow<str>>(slice: &[S], sep: &str) -> String {
     }
 }
 
-macro_rules! generic_spezialize_for_lengths {
-    ($separator:expr, $target:expr, $iter:expr; $($num:expr),*) => {
+macro_rules! spezialize_for_lengths {
+    ($separator:expr, $target:expr, $iter:expr; $($num:tt),*) => {
         let mut target = $target;
         let iter = $iter;
-        let sep_len = $separator.len();
         let sep_bytes = $separator;
         match $separator.len() {
             $(
@@ -16,44 +15,22 @@ macro_rules! generic_spezialize_for_lengths {
                 // specialize the cases with small separator lengths
                 $num => {
                     for s in iter {
-                        target.get_unchecked_mut(..$num)
-                            .copy_from_slice(sep_bytes);
-
-                        let s_bytes = s.borrow().as_ref();
-                        let offset = s_bytes.len();
-                        target = {target}.get_unchecked_mut($num..);
-                        target.get_unchecked_mut(..offset)
-                            .copy_from_slice(s_bytes);
-                        target = {target}.get_unchecked_mut(offset..);
+                        copy_slice_and_advance!(target, sep_bytes);
+                        copy_slice_and_advance!(target, s.borrow().as_ref());
                     }
                 },
             )*
-            0 => {
-                // concat, same principle without the separator
-                for s in iter {
-                    let s_bytes = s.borrow().as_ref();
-                    let offset = s_bytes.len();
-                    target.get_unchecked_mut(..offset)
-                        .copy_from_slice(s_bytes);
-                    target = {target}.get_unchecked_mut(offset..);
-                }
-            },
-            _ => {
-                // arbitrary non-zero size fallback
-                for s in iter {
-                    target.get_unchecked_mut(..sep_len)
-                        .copy_from_slice(sep_bytes);
-
-                    let s_bytes = s.borrow().as_ref();
-                    let offset = s_bytes.len();
-                    target = {target}.get_unchecked_mut(sep_len..);
-                    target.get_unchecked_mut(..offset)
-                        .copy_from_slice(s_bytes);
-                    target = {target}.get_unchecked_mut(offset..);
-                }
-            }
         }
     };
+}
+
+macro_rules! copy_slice_and_advance {
+    ($target:expr, $bytes:expr) => {
+        let len = $bytes.len();
+        $target.get_unchecked_mut(..len)
+            .copy_from_slice($bytes);
+        $target = {$target}.get_unchecked_mut(len..);
+    }
 }
 
 // Works for joining both Vec<T> and String's inner vec
@@ -92,7 +69,7 @@ where
                 // copy separator and strs over without bounds checks
                 // generate loops with hardcoded offsets for small separators
                 // massive improvements possible (~ x2)
-                generic_spezialize_for_lengths!(sep, target, iter; 1, 2, 3, 4);
+                spezialize_for_lengths!(sep, target, iter; 0, 1, 2, 3, 4, _);
             }
             result.set_len(len);
         }
