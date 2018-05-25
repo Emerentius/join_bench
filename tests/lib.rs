@@ -2,12 +2,14 @@ extern crate join_bench;
 
 #[test]
 fn correct_output() {
-    let slices: [&[_]; 3] = [
+    let slices: [&[_]; 5] = [
         &["abc", "def", "foo"],
         &[],
         &["abc"],
+        &["gabaäœ吃", "", "", "foo"],
+        &[" 	╄ 	╅ 	╆ 	╇ 	╈ 	╉ 	", "", "foo"],
     ];
-    let seps = ["shrt", "looooooong", ""];
+    let seps = ["shrt", "looooooong", "", "“o(∩∩)o...哈哈”", "中文", "œ"];
 
     for strs in &slices {
         for sep in &seps {
